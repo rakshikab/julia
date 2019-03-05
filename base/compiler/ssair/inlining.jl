@@ -25,8 +25,9 @@ struct InliningTodo
     # need to be rewritten.
     isva::Bool
     isinvoke::Bool
+    is_yakc::Bool
     na::Int
-    method::Method  # The method being inlined
+    method::Union{Method, Nothing}  # The method being inlined
     sparams::Vector{Any} # The static parameters we computed for this call site
     metharg # ::Type
     # The LineTable and IR of the inlinee
@@ -68,6 +69,9 @@ isinvoke(inl::UnionSplit) = false
 @specialize
 
 function ssa_inlining_pass!(ir::IRCode, linetable::Vector{LineInfoNode}, sv::OptimizationState)
+    for (idx, ir′) in enumerate(ir.yakcs)
+        ir.yakcs[idx] = ssa_inlining_pass!(ir′, ir′.linetable, sv)
+    end
     # Go through the function, performing simple ininlingin (e.g. replacing call by constants
     # and analyzing legality of inlining).
     @timeit "analysis" todo = assemble_inline_todo!(ir, sv)
@@ -334,7 +338,8 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
             # face of rename_arguments! mutating in place - should figure out
             # something better eventually.
             inline_compact[idx′] = nothing
-            stmt′ = ssa_substitute!(idx′, stmt′, argexprs, item.method.sig, item.sparams, linetable_offset, boundscheck_idx, compact)
+            stmt′ = ssa_substitute!(idx′, stmt′, argexprs, item.method === nothing ? nothing :
+                item.method.sig, item.sparams, linetable_offset, boundscheck_idx, compact)
             if isa(stmt′, ReturnNode)
                 isa(stmt′.val, SSAValue) && (compact.used_ssas[stmt′.val.id] += 1)
                 return_value = SSAValue(idx′)
@@ -344,6 +349,8 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
                     compact_exprtype(compact, stmt′.val) :
                     compact_exprtype(inline_compact, stmt′.val)
                 break
+            elseif isexpr(stmt′, :new_yakc)
+                stmt′ = Expr(:new_yakc, stmt′.args[1], stmt′.args[2], stmt′.args[3], stmt′.args[4] + length(compact.ir.yakcs))
             end
             inline_compact[idx′] = stmt′
         end
@@ -361,7 +368,7 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
         inline_compact = IncrementalCompact(compact, item.ir, compact.result_idx)
         for ((_, idx′), stmt′) in inline_compact
             inline_compact[idx′] = nothing
-            stmt′ = ssa_substitute!(idx′, stmt′, argexprs, item.method.sig, item.sparams, linetable_offset, boundscheck_idx, compact)
+            stmt′ = ssa_substitute!(idx′, stmt′, argexprs, item.method === nothing ? nothing : item.method.sig, item.sparams, linetable_offset, boundscheck_idx, compact)
             if isa(stmt′, ReturnNode)
                 if isdefined(stmt′, :val)
                     val = stmt′.val
@@ -381,7 +388,6 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
                         push!(pn.values, val)
                         stmt′ = GotoNode(post_bb_id)
                     end
-
                 end
             elseif isa(stmt′, GotoNode)
                 stmt′ = GotoNode(stmt′.label + bb_offset)
@@ -391,6 +397,8 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
                 stmt′ = GotoIfNot(stmt′.cond, stmt′.dest + bb_offset)
             elseif isa(stmt′, PhiNode)
                 stmt′ = PhiNode(Int32[edge+bb_offset for edge in stmt′.edges], stmt′.values)
+            elseif isexpr(stmt′, :new_yakc)
+                stmt′ = Expr(:new_yakc, stmt′.args[1], stmt′.args[2], stmt′.args[3], stmt′.args[4] + length(compact.ir.yakcs))
             end
             inline_compact[idx′] = stmt′
         end
@@ -409,6 +417,7 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
             return_value = insert_node_here!(compact, pn, compact_exprtype(compact, SSAValue(idx)), compact.result[idx][:line])
         end
     end
+    append!(compact.ir.yakcs, item.ir.yakcs)
     return_value
 end
 
@@ -531,6 +540,12 @@ function batch_inline!(todo::Vector{Any}, ir::IRCode, linetable::Vector{LineInfo
         for ((old_idx, idx), stmt) in compact
             if old_idx == inline_idx
                 argexprs = copy(stmt.args)
+                if isa(item, InliningTodo) && item.is_yakc
+                    # For yakc, the `self` argument is the object passed as
+                    # the environment
+                    @assert isa(argexprs[1], SSAValue)
+                    argexprs[1] = compact[argexprs[1]].args[2]
+                end
                 refinish = false
                 if compact.result_idx == first(compact.result_bbs[compact.active_result_bb].stmts)
                     compact.active_result_bb -= 1
@@ -748,7 +763,7 @@ function analyze_method!(idx::Int, atypes::Vector{Any}, match::MethodMatch,
 
     return InliningTodo(idx,
         na > 0 && method.isva,
-        isinvoke, na,
+        isinvoke, false, na,
         method, Any[match.sparams...], match.spec_types,
         ir2, linear_inline_eligible(ir2))
 end
@@ -1013,6 +1028,16 @@ function process_simple!(ir::IRCode, todo, idx::Int, params::OptimizationParams,
         return nothing
     end
 
+    if sig.ft ⊑ Core.YAKC
+        callee = stmt.args[1]
+        if isa(callee, SSAValue) && isexpr(ir.stmts[callee.id][:inst], :new_yakc) && length(ir.stmts[callee.id][:inst].args) == 4
+            ir′ = ir.yakcs[ir.stmts[callee.id][:inst].args[4]::Int]::IRCode
+            push!(todo, InliningTodo(idx, false, false, true, 0, nothing, Any[], nothing,
+                ir′, linear_inline_eligible(ir′)))
+            return nothing
+        end
+    end
+
     sig = with_atype(sig)
 
     # In :invoke, make sure that the arguments we're passing are a subtype of the
@@ -1149,6 +1174,10 @@ function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
                 ir.stmts[idx][:inst] = quoted(calltype.val)
                 continue
             end
+            # Refuse to inline YAKCs we can't see otherwise, to preserve the
+            # possibility of functions higher in the call stack seeing this
+            # and performing the inlining.
+            continue
         end
 
         # Ok, now figure out what method to call

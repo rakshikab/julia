@@ -2447,6 +2447,15 @@ static jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t *gf, j
     return _jl_invoke(gf, args, nargs - 1, mfunc, world);
 }
 
+JL_DLLEXPORT jl_value_t *jl_invoke_yakc(jl_yakc_t *yakc, jl_value_t *args)
+{
+    // TODO: Compiler support
+    jl_typeassert(args, jl_tparam0(jl_typeof(yakc)));
+    jl_value_t *ret = jl_interpret_yakc(yakc, args);
+    jl_typeassert(ret, jl_tparam1(jl_typeof(yakc)));
+    return ret;
+}
+
 // Return value is rooted globally
 jl_function_t *jl_new_generic_function_with_supertype(jl_sym_t *name, jl_module_t *module, jl_datatype_t *st)
 {

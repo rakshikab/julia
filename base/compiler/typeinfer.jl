@@ -171,6 +171,42 @@ function cache_result!(interp::AbstractInterpreter, result::InferenceResult, val
     nothing
 end
 
+function typeinf_yakcs!(interp::AbstractInterpreter, me::InferenceState)
+    me.has_yakcs || return
+    code = me.src.code
+    for idx in 1:length(code)
+        stmt = code[idx]
+        isexpr(stmt, :(=)) && (stmt = stmt.args[2])
+        if isexpr(stmt, :new) && length(stmt.args) == 3 && isa(stmt.args[3], CodeInfo)
+            t = instanceof_tfunc(argextype(stmt.args[1], me.src, me.sptypes))[1]
+            t <: Core.YAKC || continue
+
+            !isa((stmt.args[3]::CodeInfo).ssavaluetypes, Int) && continue
+
+            # No InferenceResult, since we don't actually use the return type
+            argtypes = Any[argextype(stmt.args[2], me.src, me.sptypes)]
+            dt = unwrap_unionall(t)
+            if isa(dt.parameters[1], TypeVar)
+                push!(argtypes, Any)
+            else
+                TT = dt.parameters[1]
+                if isa(TT, Union)
+                    TT = tuplemerge(TT.a, TT.b)
+                end
+                !isa(TT, Union) || continue
+                for p in TT.parameters
+                    push!(argtypes, rewrap_unionall(p, t))
+                end
+            end
+            result = InferenceResult(Core.YAKC, argtypes)
+            state = InferenceState(result, copy(stmt.args[3]), false, interp)
+            typeinf_local(interp, state)
+            finish(state, interp)
+            stmt.args[3] = state.src
+        end
+    end
+end
+
 # inference completed on `me`
 # update the MethodInstance
 function finish(me::InferenceState, interp::AbstractInterpreter)
@@ -184,9 +220,12 @@ function finish(me::InferenceState, interp::AbstractInterpreter)
     else
         # annotate fulltree with type information
         type_annotate!(me)
+        typeinf_yakcs!(interp, me)
         me.result.src = OptimizationState(me, OptimizationParams(interp), interp)
     end
-    me.result.result = me.bestguess
+    if me.result !== nothing
+        me.result.result = me.bestguess
+    end
     nothing
 end
 

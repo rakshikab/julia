@@ -33,7 +33,23 @@ function normalize(@nospecialize(stmt), meta::Vector{Any})
     return stmt
 end
 
-function convert_to_ircode(ci::CodeInfo, code::Vector{Any}, coverage::Bool, nargs::Int, sv::OptimizationState)
+function add_yakc_argtypes!(argtypes, t)
+    dt = unwrap_unionall(t)
+    if isa(dt.parameters[1], TypeVar) || isa(dt.parameters[1].parameters[1], TypeVar)
+        push!(argtypes, Any)
+    else
+        TT = dt.parameters[1].parameters[1]
+        if isa(TT, Union)
+            TT = tuplemerge(TT.a, TT.b)
+        end
+        for p in TT.parameters
+            push!(argtypes, rewrap_unionall(p, t))
+        end
+    end
+end
+
+
+function convert_to_ircode(ci::CodeInfo, code::Vector{Any}, coverage::Bool, nargs::Int, sv::OptimizationState, slottypes=sv.slottypes)
     # Go through and add an unreachable node after every
     # Union{} call. Then reindex labels.
     idx = 1
@@ -41,7 +57,8 @@ function convert_to_ircode(ci::CodeInfo, code::Vector{Any}, coverage::Bool, narg
     changemap = fill(0, length(code))
     labelmap = coverage ? fill(0, length(code)) : changemap
     prevloc = zero(eltype(ci.codelocs))
-    stmtinfo = sv.stmt_info
+    stmtinfo = copy(sv.stmt_info)
+    yakcs = IRCode[]
     while idx <= length(code)
         codeloc = ci.codelocs[idx]
         if coverage && codeloc != prevloc && codeloc != 0
@@ -57,7 +74,28 @@ function convert_to_ircode(ci::CodeInfo, code::Vector{Any}, coverage::Bool, narg
             idx += 1
             prevloc = codeloc
         end
-        if code[idx] isa Expr && ci.ssavaluetypes[idx] === Union{}
+        stmt = code[idx]
+        if isexpr(stmt, :(=))
+            stmt = stmt.args[2]
+        end
+        if isexpr(stmt, :new)
+            # Pre-convert any YAKC objects
+            if length(stmt.args) == 3 && isa(stmt.args[3], CodeInfo)
+                t = widenconst(argextype(stmt.args[1], ci, sv.sptypes))
+                if t <: Type{<:Core.YAKC}
+                    argtypes′ = Any[argextype(stmt.args[2], ci, sv.sptypes)]
+                    add_yakc_argtypes!(argtypes′, t)
+                    ci′ = stmt.args[3]
+                    yakc_ir = convert_to_ircode(ci′, copy_exprargs(stmt.args[3].code), coverage,
+                            length(argtypes′)-1, sv, argtypes′)
+                    yakc_ir = slot2reg(yakc_ir, ci′, nargs, sv)
+                    push!(yakcs, yakc_ir)
+                    stmt.head = :new_yakc
+                    push!(stmt.args, length(yakcs))
+                end
+            end
+        end
+        if stmt isa Expr && ci.ssavaluetypes[idx] === Union{}
             if !(idx < length(code) && isa(code[idx + 1], ReturnNode) && !isdefined((code[idx + 1]::ReturnNode), :val))
                 # insert unreachable in the same basic block after the current instruction (splitting it)
                 insert!(code, idx + 1, ReturnNode())
@@ -105,7 +143,7 @@ function convert_to_ircode(ci::CodeInfo, code::Vector{Any}, coverage::Bool, narg
     cfg = compute_basic_blocks(code)
     types = Any[]
     stmts = InstructionStream(code, types, stmtinfo, ci.codelocs, flags)
-    ir = IRCode(stmts, cfg, collect(LineInfoNode, ci.linetable), sv.slottypes, meta, sv.sptypes)
+    ir = IRCode(stmts, cfg, collect(LineInfoNode, ci.linetable), slottypes, meta, sv.sptypes, yakcs)
     return ir
 end
 
@@ -117,16 +155,24 @@ function slot2reg(ir::IRCode, ci::CodeInfo, nargs::Int, sv::OptimizationState)
     return ir
 end
 
+function compact_all!(ir::IRCode)
+    length(ir.stmts) == 0 && return ir
+    for i in 1:length(ir.yakcs)
+        ir.yakcs[i] = compact_all!(ir.yakcs[i])
+    end
+    compact!(ir)
+end
+
 function run_passes(ci::CodeInfo, nargs::Int, sv::OptimizationState)
     preserve_coverage = coverage_enabled(sv.mod)
     ir = convert_to_ircode(ci, copy_exprargs(ci.code), preserve_coverage, nargs, sv)
     ir = slot2reg(ir, ci, nargs, sv)
     #@Base.show ("after_construct", ir)
     # TODO: Domsorting can produce an updated domtree - no need to recompute here
-    @timeit "compact 1" ir = compact!(ir)
+    @timeit "compact 1" ir = compact_all!(ir)
     @timeit "Inlining" ir = ssa_inlining_pass!(ir, ir.linetable, sv)
-    #@timeit "verify 2" verify_ir(ir)
-    ir = compact!(ir)
+    @timeit "verify 2" verify_ir(ir)
+    ir = compact_all!(ir)
     #@Base.show ("before_sroa", ir)
     @timeit "SROA" ir = getfield_elim_pass!(ir)
     #@Base.show ir.new_nodes
@@ -134,7 +180,7 @@ function run_passes(ci::CodeInfo, nargs::Int, sv::OptimizationState)
     ir = adce_pass!(ir)
     #@Base.show ("after_adce", ir)
     @timeit "type lift" ir = type_lift_pass!(ir)
-    @timeit "compact 3" ir = compact!(ir)
+    @timeit "compact 3" ir = compact_all!(ir)
     #@Base.show ir
     if JLOptions().debug_level == 2
         @timeit "verify 3" (verify_ir(ir); verify_linetable(ir.linetable))
