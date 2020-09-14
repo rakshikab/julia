@@ -96,17 +96,17 @@ julia> A = [1 2; 3 4]
  1  2
  3  4
 
-julia> reinterpret(reshape, Complex{Int}, A)
+julia> reinterpret(reshape, Complex{Int}, A)    # the result is a vector
 2-element reinterpret(reshape, Complex{$Int}, ::Matrix{$Int}):
  1 + 3im
  2 + 4im
 
- julia> a = [(1,2,3), (4,5,6)]
+julia> a = [(1,2,3), (4,5,6)]
 2-element Vector{Tuple{$Int, $Int, $Int}}:
  (1, 2, 3)
  (4, 5, 6)
 
-julia> reinterpret(reshape, Int, a)
+julia> reinterpret(reshape, Int, a)             # the result is a matrix
 3×2 reinterpret(reshape, $Int, ::Vector{Tuple{$Int, $Int, $Int}}):
  1  4
  2  5
