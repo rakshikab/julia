@@ -74,7 +74,7 @@ RefArray(x::AbstractArray{T}, i::Int, roots::Any) where {T} = RefArray{T,typeof(
 RefArray(x::AbstractArray{T}, i::Int=1, roots::Nothing=nothing) where {T} = RefArray{T,typeof(x),Nothing}(x, i, nothing)
 convert(::Type{Ref{T}}, x::AbstractArray{T}) where {T} = RefArray(x, 1)
 
-function unsafe_convert(P::Type{Ptr{T}}, b::RefArray{T}) where T
+function unsafe_convert(P::Union{Type{Ptr{T}},Type{Ptr{Cvoid}}}, b::RefArray{T})::P where T
     if allocatedinline(T)
         p = pointer(b.x, b.i)
     elseif isconcretetype(T) && T.mutable
@@ -83,12 +83,11 @@ function unsafe_convert(P::Type{Ptr{T}}, b::RefArray{T}) where T
         # see comment on equivalent branch for RefValue
         p = pointerref(Ptr{Ptr{Cvoid}}(pointer(b.x, b.i)), 1, Core.sizeof(Ptr{Cvoid}))
     end
-    return convert(P, p)
+    return p
 end
-function unsafe_convert(P::Type{Ptr{Any}}, b::RefArray{Any})
-    return convert(P, pointer(b.x, b.i))
+function unsafe_convert(::Type{Ptr{Any}}, b::RefArray{Any})::Ptr{Any}
+    return pointer(b.x, b.i)
 end
-unsafe_convert(::Type{Ptr{Cvoid}}, b::RefArray{T}) where {T} = convert(Ptr{Cvoid}, unsafe_convert(Ptr{T}, b))
 
 ###
 if is_primary_base_module
