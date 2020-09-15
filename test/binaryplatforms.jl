@@ -114,7 +114,7 @@ end
     @test p["foo"] == "bar"
     @test p["os"] == "linux"
     p["os"] = "JuliaOS"
-    @test p["os"] == "JuliaOS"
+    @test p["os"] == "juliaos"
 end
 
 @testset "Triplet parsing" begin

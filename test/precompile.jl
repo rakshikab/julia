@@ -288,8 +288,8 @@ try
             Dict(let m = Base.root_module(Base, s)
                      Base.PkgId(m) => Base.module_build_id(m)
                  end for s in
-                [:Artifacts, :Base64, :CRC32c, :Dates, :DelimitedFiles, :Distributed, :FileWatching, :Markdown,
-                 :Future, :Libdl, :LinearAlgebra, :Logging, :Mmap, :Printf,
+                [:Artifacts, :Base64, :CompilePreferences, :CRC32c, :Dates, :DelimitedFiles, :Distributed,
+                 :FileWatching, :Future, :Libdl, :LinearAlgebra, :Logging, :Markdown, :Mmap, :Printf,
                  :Profile, :Random, :Serialization, :SharedArrays, :SparseArrays, :SuiteSparse, :Test,
                  :Unicode, :REPL, :InteractiveUtils, :Pkg, :LibGit2, :SHA, :UUIDs, :Sockets,
                  :Statistics, :TOML, :MozillaCACerts_jll, :LibCURL_jll, :LibCURL, :Downloads,]),
@@ -420,7 +420,7 @@ try
           """)
 
     cachefile = Base.compilecache(Base.PkgId("FooBar"))
-    @test cachefile == Base.compilecache_path(Base.PkgId("FooBar"))
+    @test cachefile == Base.compilecache_path(Base.PkgId("FooBar"), Base.TOMLCache())
     @test isfile(joinpath(cachedir, "FooBar.ji"))
     @test Base.stale_cachefile(FooBar_file, joinpath(cachedir, "FooBar.ji")) isa Vector
     @test !isdefined(Main, :FooBar)

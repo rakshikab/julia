@@ -111,6 +111,8 @@ Standard library changes
 * The `Pkg.Artifacts` module has been imported as a separate standard library.  It is still available as
   `Pkg.Artifacts`, however starting from Julia v1.6+, packages may import simply `Artifacts` without importing
   all of `Pkg` alongside. ([#37320])
+* A new standard library, `CompilePreferences`, has been added to allow packages to store settings within the top-
+  level `Project.toml`, and force recompilation when the preferences are changed. ([#xxxxx])
 
 #### LinearAlgebra
 
