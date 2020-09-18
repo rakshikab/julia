@@ -16,14 +16,13 @@ ifeq ($(OS),WINNT)
 LOADER_CFLAGS += -municode -mconsole -nostdlib -fno-stack-check -fno-stack-protector -mno-stack-arg-probe
 endif
 
-#LDFLAGS += -static
 ifeq ($(OS),WINNT)
 LOADER_LDFLAGS += -municode -mconsole -nostdlib --disable-auto-import \
                   --disable-runtime-pseudo-reloc -lntdll -lkernel32 -lpsapi
 else ifeq ($(OS),Linux)
-LOADER_LDFLAGS += -ldl  -rdynamic -lc
+LOADER_LDFLAGS += -Wl,--no-as-needed -ldl -lpthread -rdynamic -lc -Wl,--as-needed
 else ifeq ($(OS),FreeBSD)
-LOADER_LDFLAGS += -ldl  -rdynamic -lc
+LOADER_LDFLAGS += -Wl,--no-as-needed -ldl -lpthread -rdynamic -lc -Wl,--as-needed
 else ifeq ($(OS),Darwin)
 LOADER_LDFLAGS += -lSystem
 endif
