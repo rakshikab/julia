@@ -1141,3 +1141,13 @@ end
     @test last(itr, 1) == [itr[end]]
     @test_throws ArgumentError last(itr, -6)
 end
+
+@testset "eachindex" for input_len in (collect(2:2:10))
+    @test eachindex(collect(1:0.5:input_len)) == Base.OneTo(2*input_len-1)
+    let input = collect(1:input_len)
+        @test eachindex(reshape(input, (2.0, input_len/2))) == Base.OneTo(input_len)
+        @test eachindex(input, input, input) == Base.OneTo(input_len)
+        @test keys(IndexLinear(), input, input) == Base.OneTo(input_len)
+        @test_throws DimensionMismatch eachindex(input, collect(input_len+1))
+    end
+end
