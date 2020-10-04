@@ -343,11 +343,7 @@ function /(a::Complex{T}, b::Complex{T}) where T<:Real
         den = bim + r*bre
         Complex((are*r + aim)/den, (aim*r - are)/den)
     else
-        if isinf(bre) && isinf(bim)
-            r = sign(bim)/sign(bre)
-        else
-            r = bim / bre
-        end
+        r = bim / bre
         den = bre + r*bim
         Complex((are + aim*r)/den, (aim - are*r)/den)
     end
